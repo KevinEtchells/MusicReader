@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <title>Music Reader</title>
+        <style>
+            body {font-family: Arial, sans-serif; height: 100vh; margin: 0; overflow: hidden; width: 100vw;}
+            button, input {padding: 5px;}
+            .overlay {height: 100vh; left: 0; position: absolute; top: 0; width: 100vw;}
+            .reader {text-align: center;}
+            .reader canvas {}
+            .popup {background-color: rgba(255,255,255,0.9); border: 1px solid black; padding: 1vw; position: absolute;}
+            .songs {left: calc(49vw - 381px); top: 0; width: 760px;}
+            .songs table {width: 100%;}
+            td:nth-child(1) input {width: 350px;}
+            .number--small {width: 60px;}
+            .metronome {bottom: 0; left: calc(49vw - 238px); width: 474px;}
+            .tick {border: 1px solid black; display: inline-block; height: 28px; vertical-align: top; width: 28px;}
+            textarea {margin-top: 5px; width: calc(100% - 10px);}
+        </style>
+        <script src="js/vue.js"></script>
+        <script src="js/pdfjs/pdf.js"></script>
+    </head>
+    <body>
+
+        <div id="app">
+
+            <div class="reader">
+                <template v-if="currentSong !== -1">
+                    <canvas v-for="pageIndex in songs[currentSong].pages" v-show="pageIndex === page + 1"></canvas>
+                </template>
+            </div>
+
+            <div class="overlay"></div>
+
+            <div class="songs popup" v-if="popups.songs || currentSong === -1">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Song</th>
+                            <th>BPM</th>
+                            <th>Scale</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="song, songIndex in songs" :key="song.id">
+                            <td><input type="text" v-model="song.path" v-on:change="update"/></td>
+                            <td><input class="number--small" type="number" v-model="song.bpm" v-on:change="update"/></td>
+                            <td><input class="number--small" type="number" v-model="song.scale" v-on:change="update"/></td>
+                            <td>
+                                <button v-on:click="viewSong(songIndex)">View</button>
+                                <button v-on:click="moveSong(songIndex, 1)" v-bind:disabled="songIndex === songs.length - 1">Down</button>
+                                <button v-on:click="moveSong(songIndex, -1)" v-bind:disabled="songIndex === 0">Up</button>
+                                <button v-on:click="removeSong(songIndex)">Remove</button>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+                <input type="file" v-on:change="addSong"/>
+            </div>
+
+            <div class="metronome popup" v-if="popups.metronome && currentSong !== -1">
+                <label>BPM: <input type="number" v-model="songs[currentSong].bpm" v-on:change="update"/></label>
+                <button v-on:click="changeTempo(-1)">Down</button>
+                <button v-on:click="changeTempo(1)">Up</button>
+                <button v-on:click="tempoTap">Tap</button>
+                <button v-on:click="startMetronome">Start</button>
+                <button v-on:click="stopMetronome">Stop</button>
+                <div class="tick"></div>
+                <textarea v-model="songs[currentSong].notes" v-on:change="update"></textarea>
+            </div>
+
+        </div>
+
+        <script>
+
+            class Data {
+
+                static load () {
+                    const data = window.localStorage.getItem("music-reader");
+                    if (data) {
+                        return JSON.parse(data);
+                    } else {
+                        return [];
+                    }
+                }
+
+                static save (data) {
+                    if (data) {
+                        window.localStorage.setItem("music-reader", JSON.stringify(data));
+                    } else {
+                        throw new Error("No data to save");
+                    }
+                }
+
+            }
+
+            let metronomeOn = false;
+            tick = () => {
+                let $tick = document.querySelector(".tick");
+                if ($tick) { // it may be undefined if window recently closed
+                    $tick.style.backgroundColor = "green";
+                    window.setTimeout(() => {
+                        $tick.style.backgroundColor = "transparent";
+                    }, 200);
+                    if (metronomeOn) {
+                        window.setTimeout(tick, (60 / vm.songs[vm.currentSong].bpm) * 1000);
+                    }
+                }
+            }
+
+            var vm = new Vue({
+
+                el: "#app",
+
+                data: {
+                    currentSong: -1,
+                    page: 0,
+                    songs: Data.load(),
+                    popups: {
+                        songs: false,
+                        metronome: false
+                    }
+                },
+
+                methods: {
+
+                    update: function () {
+                        let self = this;
+                        Vue.nextTick(function () {
+                            Data.save(self.songs);
+                        });
+                    },
+
+                    addSong: function (evt) {
+
+                        let self = this;
+
+                        let newSong = {
+                            path: evt.target.files[0].name.replace(".pdf", ""),
+                            bpm: 120,
+                            id: Date.now(),
+                            scale: 150
+                        };
+
+                        // load file
+                        let reader = new FileReader();
+                        reader.onloadend = (evt) => {
+                            if (evt.target.readyState == FileReader.DONE) {
+
+                                // save raw data
+                                newSong.data = evt.target.result;
+
+                                // get PDF info
+                                let loadingTask = pdfjsLib.getDocument(evt.target.result);
+                                loadingTask.promise.then((pdf) => {
+
+                                    // save number of pages
+                                    newSong.pages = pdf._pdfInfo.numPages;
+
+                                    // save newSong to DB
+                                    self.songs.push(newSong);
+                                    self.update();
+
+                                });
+
+                            }
+                        };
+                        reader.readAsDataURL(evt.target.files[0]);
+
+                    },
+
+                    viewSong: function (songIndex) {
+
+                        let self = this;
+
+                        this.page = 0;
+                        this.currentSong = songIndex;
+                        this.popups.songs = false;
+
+                        const scale = (this.songs[songIndex].scale || 150) / 100;
+                        console.log(scale);
+
+                        Vue.nextTick(() => {
+
+                            let $canvasses = document.querySelectorAll(".reader canvas");
+
+                            // get PDF info
+                            let loadingTask = pdfjsLib.getDocument(self.songs[self.currentSong].data);
+                            loadingTask.promise.then((pdf) => {
+
+                                for (let pageIndex = 0; pageIndex < pdf._pdfInfo.numPages; pageIndex ++) {
+                                    let $canvas = $canvasses[pageIndex];
+                                    pdf.getPage(pageIndex + 1).then((page) => {
+
+                                        let viewport = page.getViewport({scale: scale});
+                                        let context = $canvas.getContext('2d');
+                                        $canvas.height = viewport.height;
+                                        $canvas.width = viewport.width;
+
+                                        let renderTask = page.render({
+                                            canvasContext: context,
+                                            viewport: viewport
+                                        });
+                                        renderTask.promise;
+                                    });
+                                }
+
+                            });
+
+                        });
+
+                    },
+
+                    moveSong: function (songIndex, direction) {
+                        let tempData = JSON.parse(JSON.stringify(this.songs[songIndex]));
+                        this.songs[songIndex] = this.songs[songIndex + direction];
+                        this.songs[songIndex + direction] = tempData;
+                        this.$forceUpdate();
+                        this.update();
+                    },
+
+                    removeSong: function (songIndex) {
+                        if (window.confirm("Are you sure you want to remove " + this.songs[songIndex].path + "?")) {
+                            this.songs.splice(songIndex, 1);
+                            this.update();
+                        }
+                    },
+
+                    changeTempo: function (amount) {
+                        this.songs[this.currentSong].bpm += amount;
+                        this.update();
+                    },
+
+                    tempoTap: (() => {
+                        const MIN_TAP_INTERVAL = 2000;
+                        let tapTimings = [];
+
+                        return function () {
+
+                            const newTime = Date.now();
+                            if (newTime < tapTimings[tapTimings.length - 1] + MIN_TAP_INTERVAL) { // add tap to average times
+                                tapTimings.push(newTime);
+                            } else { // restart
+                                tapTimings = [newTime];
+                            }
+
+                            // work out new bpm, if enough data
+                            if (tapTimings.length >= 2) {
+
+                                // get average gap between taps
+                                let averageInterval = 0;
+                                for (let tapIndex = 0; tapIndex < tapTimings.length - 1; tapIndex ++) {
+                                    averageInterval += (tapTimings[tapIndex + 1] - tapTimings[tapIndex]);
+                                }
+                                averageInterval = averageInterval / (tapTimings.length - 1); // -1 as 2 taps only gives one interval
+
+                                this.songs[this.currentSong].bpm = Math.round(60 / (averageInterval / 1000));
+                                this.update();
+                            }
+
+                        }
+                    })(),
+
+                    startMetronome: function () {
+                        metronomeOn = true;
+                        tick();
+                    },
+
+                    stopMetronome: function () {
+                        metronomeOn = false;
+                    }
+                }
+
+            });
+
+            document.querySelector(".overlay").addEventListener("click", (evt) => {
+                if (evt.screenY < 150) { // top
+                    vm.popups.songs = true;
+                    vm.popups.metronome = false;
+                } else if (evt.screenY > document.body.clientHeight - 50) { // bottom
+                    vm.popups.metronome = true;
+                    vm.popups.songs = false;
+                } else if (evt.screenX < document.body.clientWidth / 2) { // left
+                    if (vm.page > 0) {
+                        vm.page --;
+                    }
+                    vm.popups.songs = false;
+                    vm.popups.metronome = false;
+                } else { // right
+                    if (vm.page < vm.songs[vm.currentSong].pages - 1) {
+                        vm.page ++;
+                    }
+                    vm.popups.songs = false;
+                    vm.popups.metronome = false;
+                }
+            });
+
+            // Footswitch
+            document.body.addEventListener("keypress", evt => {
+                if (evt.key === ' ') {
+                    if (vm.page < vm.songs[vm.currentSong].pages - 1) {
+                        vm.page ++;
+                    } else if (vm.page > 0) {
+                        vm.page --;
+                    }
+                }
+            });
+
+        </script>
+
+    </body>
+</html>
