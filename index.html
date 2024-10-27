@@ -5,12 +5,13 @@
         <style>
             body {font-family: Arial, sans-serif; height: 100vh; margin: 0; overflow: hidden; width: 100vw;}
             button, input {padding: 5px;}
+            .canvas {width: 100vw; height: 100vh; object-fit: contain;}
             .overlay {height: 100vh; left: 0; position: absolute; top: 0; width: 100vw;}
             .reader {text-align: center;}
-            .reader canvas {}
             .popup {background-color: rgba(255,255,255,0.9); border: 1px solid black; padding: 1vw; position: absolute;}
             .songs {left: calc(49vw - 381px); top: 0; width: 760px;}
             .songs table {width: 100%;}
+            .songs th {text-align: left;}
             td:nth-child(1) input {width: 350px;}
             .number--small {width: 60px;}
             .metronome {bottom: 0; left: calc(49vw - 238px); width: 474px;}
@@ -26,7 +27,7 @@
 
             <div class="reader">
                 <template v-if="currentSong !== -1">
-                    <canvas v-for="pageIndex in songs[currentSong].pages" v-show="pageIndex === page + 1"></canvas>
+                    <img class="canvas" v-for="pageIndex in songs[currentSong].pages" v-show="pageIndex === page + 1"></img>
                 </template>
             </div>
 
@@ -38,7 +39,6 @@
                         <tr>
                             <th>Song</th>
                             <th>BPM</th>
-                            <th>Scale</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
@@ -46,7 +46,6 @@
                         <tr v-for="song, songIndex in songs" :key="song.id">
                             <td><input type="text" v-model="song.path" v-on:change="update"/></td>
                             <td><input class="number--small" type="number" v-model="song.bpm" v-on:change="update"/></td>
-                            <td><input class="number--small" type="number" v-model="song.scale" v-on:change="update"/></td>
                             <td>
                                 <button v-on:click="viewSong(songIndex)">View</button>
                                 <button v-on:click="moveSong(songIndex, 1)" v-bind:disabled="songIndex === songs.length - 1">Down</button>
@@ -139,8 +138,7 @@
                         let newSong = {
                             path: evt.target.files[0].name.replace(".pdf", ""),
                             bpm: 120,
-                            id: Date.now(),
-                            scale: 150
+                            id: Date.now()
                         };
 
                         // load file
@@ -178,31 +176,26 @@
                         this.currentSong = songIndex;
                         this.popups.songs = false;
 
-                        const scale = (this.songs[songIndex].scale || 150) / 100;
-                        console.log(scale);
-
                         Vue.nextTick(() => {
 
-                            let $canvasses = document.querySelectorAll(".reader canvas");
+                            let imageCanvasses = document.querySelectorAll(".canvas");
 
                             // get PDF info
                             let loadingTask = pdfjsLib.getDocument(self.songs[self.currentSong].data);
                             loadingTask.promise.then((pdf) => {
 
                                 for (let pageIndex = 0; pageIndex < pdf._pdfInfo.numPages; pageIndex ++) {
-                                    let $canvas = $canvasses[pageIndex];
-                                    pdf.getPage(pageIndex + 1).then((page) => {
+                                    let canvas = document.createElement("canvas");
+                                    pdf.getPage(pageIndex + 1).then(async (page) => {
 
-                                        let viewport = page.getViewport({scale: scale});
-                                        let context = $canvas.getContext('2d');
-                                        $canvas.height = viewport.height;
-                                        $canvas.width = viewport.width;
+                                        let viewport = page.getViewport({ scale: 1.0 });
+                                        let context = canvas.getContext('2d');
+                                        canvas.height = viewport.height;
+                                        canvas.width = viewport.width;
 
-                                        let renderTask = page.render({
-                                            canvasContext: context,
-                                            viewport: viewport
-                                        });
-                                        renderTask.promise;
+                                        await page.render({ canvasContext: context, viewport: viewport }).promise;
+                                        imageCanvasses[pageIndex].src = canvas.toDataURL("image/webp", 1.0); // webp seems to produce smaller file sizes than avif
+                                        
                                     });
                                 }
 
